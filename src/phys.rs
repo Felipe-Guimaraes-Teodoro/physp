@@ -1,9 +1,10 @@
-use std::{collections::HashMap, ops::{Index, IndexMut}};
+use std::{collections::HashMap, ops::{Index, IndexMut}, sync::{mpsc::channel, Arc}};
 
 use chaos_framework::Renderer;
 use rapier3d::prelude::*;
+use tokio::sync::{mpsc::{self, Sender}, Mutex};
 
-use crate::physics_util::PhysMesh;
+use crate::{globals::read_rb_overhaul_size, physics_util::PhysMesh};
 
 pub struct PhysicalWorld {
     pub rigid_body_set: RigidBodySet,
@@ -55,7 +56,7 @@ impl PhysicalWorld {
         }
     }
 
-    pub async fn step(&mut self, dt: f32) {
+    pub fn step(&mut self, dt: f32) {
         self.integration_parameters.dt = dt;
 
         self.physics_pipeline.step(
@@ -78,21 +79,39 @@ impl PhysicalWorld {
 }
 
 pub struct World {
-    pub phys_world: PhysicalWorld,
+    pub phys_world: Arc<Mutex<PhysicalWorld>>,
     pub phys_meshes: HashMap<PhysMeshHandle, PhysMesh>,
+    sender: Sender<f32>,
 }
 
 impl World {
     pub fn new() -> Self {
-        Self { phys_world: PhysicalWorld::new(), phys_meshes: HashMap::new() }
+        let (sender, mut receiver) = mpsc::channel(1);
+
+        let phys_world = Arc::new(Mutex::new(PhysicalWorld::new()));
+        let phys_world_clone = phys_world.clone();
+        tokio::task::spawn(async move {
+            while let Some(dt) = receiver.recv().await {
+                if let Ok(mut phys_world) = phys_world_clone.try_lock() {
+                // let mut phys_world = phys_world_clone.lock().await;
+                    phys_world.step(dt);
+                }
+            };
+        });
+
+        Self { phys_world, phys_meshes: HashMap::new(), sender }
     }
 
     pub async fn update(&mut self, renderer: &mut Renderer, dt: f32) {
-        for phys_mesh in self.phys_meshes.values_mut() {
-            phys_mesh.update(renderer, &mut self.phys_world);
+        /* TODO: every N frames, force the simulation to synchronize */
+
+        if let Ok(mut phys_world) = self.phys_world.try_lock() {
+            for phys_mesh in self.phys_meshes.values_mut() {
+                phys_mesh.update(renderer, &mut phys_world);
+            }
         }
 
-        self.phys_world.step(dt).await;
+        self.sender.send(dt).await.unwrap();
     }
 }
 

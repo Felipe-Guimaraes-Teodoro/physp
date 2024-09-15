@@ -1,7 +1,7 @@
-use chaos_framework::{quat, vec3, MeshHandle, Renderer, Sphere, Vec3, Vec4};
+use chaos_framework::{quat, vec3, Cuboid, MeshHandle, Renderer, Sphere, Vec3, Vec4};
 use rapier3d::prelude::*;
 
-use crate::phys::{self, PhysMeshHandle, World};
+use crate::{globals::read_rb_overhaul_size, phys::{self, PhysMeshHandle, World}};
 
 impl phys::PhysicalWorld {
     pub fn add_floor(&mut self, size: Vec3) -> ColliderHandle {
@@ -12,10 +12,24 @@ impl phys::PhysicalWorld {
     }
 
     pub fn add_sphere_rigidbody(&mut self, x: f32, y: f32, z: f32, r: f32) -> RigidBodyHandle {
+        let r = read_rb_overhaul_size();
         let rb = RigidBodyBuilder::dynamic()
             .translation(vector![x, y, z])
             .build();
         let collider = ColliderBuilder::ball(r).restitution(0.7).friction(0.5).build();
+        let body_handle = self.rigid_body_set.insert(rb.clone());
+
+        self.collider_set.insert_with_parent(collider.clone(), body_handle, &mut self.rigid_body_set);
+
+        return body_handle;
+    }
+
+    pub fn add_cube_rigidbody(&mut self, x: f32, y: f32, z: f32, r: f32) -> RigidBodyHandle {
+        let r = read_rb_overhaul_size();
+        let rb = RigidBodyBuilder::dynamic()
+            .translation(vector![x, y, z])
+            .build();
+        let collider = ColliderBuilder::cuboid(r, r, r).restitution(0.3).friction(0.5).build();
         let body_handle = self.rigid_body_set.insert(rb.clone());
 
         self.collider_set.insert_with_parent(collider.clone(), body_handle, &mut self.rigid_body_set);
@@ -42,11 +56,28 @@ pub struct PhysMesh {
 
 impl PhysMesh {
     pub fn sphere(renderer: &mut Renderer, phys_world: &mut phys::PhysicalWorld) -> Self {
+        let mut sphere_mesh = Sphere::new(16, read_rb_overhaul_size(), Vec4::ONE).mesh();
+        for face in sphere_mesh.indices.chunks_mut(3) {
+            face.reverse();
+        }
         Self {
             mesh: renderer.add_mesh(
-                Sphere::new(16, 1.0, Vec4::ONE).mesh()
+                sphere_mesh
             ).unwrap(),
             body: phys_world.add_sphere_rigidbody(0.0, 1.0, 0.0, 1.0)
+        }
+    }
+
+    pub fn cube(renderer: &mut Renderer, phys_world: &mut phys::PhysicalWorld) -> Self {
+        let mut cube_mesh = Cuboid::new(Vec3::ONE * 2.0 * read_rb_overhaul_size(), Vec4::ONE).mesh();
+        for face in cube_mesh.indices.chunks_mut(3) {
+            face.reverse();
+        }
+        Self {
+            mesh: renderer.add_mesh(
+                cube_mesh
+            ).unwrap(),
+            body: phys_world.add_cube_rigidbody(0.0, 1.0, 0.0, 1.0)
         }
     }
 
@@ -63,8 +94,9 @@ impl PhysMesh {
 }
 
 impl World {
-    pub fn add_sphere(&mut self, renderer: &mut Renderer) -> PhysMeshHandle {
-        let sphere = PhysMesh::sphere(renderer, &mut self.phys_world);
+    pub async fn add_sphere(&mut self, renderer: &mut Renderer) -> PhysMeshHandle {
+        let mut phys_world = self.phys_world.lock().await;
+        let sphere = PhysMesh::sphere(renderer, &mut phys_world);
         let handle = PhysMeshHandle {
             id: self.phys_meshes.len() as u32,
         };
@@ -74,9 +106,29 @@ impl World {
         handle
     }
 
-    pub fn destroy(&mut self, renderer: &mut Renderer, handle: PhysMeshHandle) {
+    pub async fn add_cube(&mut self, renderer: &mut Renderer) -> PhysMeshHandle {
+        let mut phys_world = self.phys_world.lock().await;
+        let cube = PhysMesh::cube(renderer, &mut phys_world);
+        let handle = PhysMeshHandle {
+            id: self.phys_meshes.len() as u32,
+        };
+
+        self.phys_meshes.insert(handle, cube);
+
+        handle
+    }
+
+    pub fn add_floor(&mut self, size: Vec3) {
+        if let Ok(mut phys_world) = self.phys_world.try_lock() {
+            phys_world.add_floor(size);
+        }
+    }
+
+    pub async fn destroy(&mut self, renderer: &mut Renderer, handle: PhysMeshHandle) {
+        let mut phys_world = self.phys_world.lock().await;
+        
         let phys_mesh = &self.phys_meshes[handle];
-        self.phys_world.remove_rigidbody(phys_mesh.body);
+        phys_world.remove_rigidbody(phys_mesh.body);
         renderer.destroy_mesh(phys_mesh.mesh);
         self.phys_meshes.remove(&handle);
     }
