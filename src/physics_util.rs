@@ -1,5 +1,5 @@
 use chaos_framework::{quat, vec3, Cuboid, MeshHandle, Renderer, Sphere, Vec3, Vec4};
-use rapier3d::prelude::*;
+use rapier3d::{parry::query::Ray, prelude::*};
 
 use crate::{globals::read_rb_overhaul_size, phys::{self, PhysMeshHandle, World}};
 
@@ -35,6 +35,32 @@ impl phys::PhysicalWorld {
         self.collider_set.insert_with_parent(collider.clone(), body_handle, &mut self.rigid_body_set);
 
         return body_handle;
+    }
+
+    
+    pub fn body_raycast(&mut self, origin: Vec3, direction: Vec3) -> Option<RigidBodyHandle> {
+        let ray = Ray::new(
+            vector![origin.x, origin.y, origin.z].into(), 
+            vector![direction.x, direction.y, direction.z]
+        );
+
+        if let Some((handle, _hit)) = self.query_pipeline.cast_ray(
+            &self.rigid_body_set,
+            &self.collider_set,          
+            &ray,               
+            1000.0,            
+            true,   
+            QueryFilter::default() 
+        ) {
+            if let Some(collider) = self.collider_set.get(handle) {
+                dbg!(collider.parent());
+                return collider.parent();
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
     }
 
     pub fn remove_rigidbody(&mut self, handle: RigidBodyHandle) {

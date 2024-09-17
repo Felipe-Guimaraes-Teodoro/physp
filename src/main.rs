@@ -3,6 +3,9 @@ mod physics_util;
 mod server;
 mod client;
 mod globals;
+mod viewport;
+mod raycaster;
+mod utils;
 
 use std::sync::{Arc, Mutex};
 
@@ -12,8 +15,10 @@ use glfw::Key;
 use globals::modify_rb_overhaul_size;
 use phys::{PhysMeshHandle, World};
 use rapier3d::{prelude::*, rayon::iter::{IntoParallelIterator, ParallelIterator}};
+use raycaster::Raycaster;
 use server::Server;
 use tokio::task;
+use viewport::{AppViewport, ViewportCtx};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() {
@@ -35,7 +40,7 @@ async fn main() {
 
     renderer.add_light(Light { position: Vec3::ONE, color: Vec3::ONE });
 
-    el.window.glfw.set_swap_interval(SwapInterval::Sync(0));
+    el.window.glfw.set_swap_interval(SwapInterval::Sync(1));
 
     let mut world = World::new();
 
@@ -52,26 +57,24 @@ async fn main() {
     
     client.send_message(addr, "hi!").await.unwrap();
 
+    let mut ctx = ViewportCtx::new();
 
-    let mut rb_size = 1.0;
-    let mut render_time = 0.0;
-    let mut phys_time = 0.0;
+    let mut current_handle = None;
 
     while !el.window.should_close() {
         el.update();
         renderer.update();
         let now = std::time::Instant::now();
         world.update(&mut renderer, el.dt).await;
-        phys_time = now.elapsed().as_secs_f32();
+        ctx.phys_time = now.elapsed().as_secs_f32();
         
         renderer.camera.input(&el);
         renderer.camera.mouse_callback(el.event_handler.mouse_pos, &el.window);
         renderer.camera.update(renderer.camera.pos, &el);
 
-        let frame = el.ui.frame(&mut el.window);
-        frame.text("hello, world!\nTIP: hold alt to toggle mouse mode");
-        frame.slider("RB_OVERHAUL_SIZE", 0.1, 10.0, &mut rb_size);
-        frame.text(format!("RT: {:.1}ms\nST: {:.1}ms", render_time*1000.0, phys_time*1000.0));
+        {
+            AppViewport::uptate(&mut ctx, &mut el, &mut renderer);
+        }
         
         if el.is_key_down(Key::LeftAlt) {
             el.window.set_cursor_mode(CursorMode::Normal);
@@ -79,10 +82,13 @@ async fn main() {
             el.window.set_cursor_mode(CursorMode::Disabled);
         }
 
-        modify_rb_overhaul_size(rb_size);
+        if el.event_handler.key_just_pressed(Key::Q) {
+            current_handle = Raycaster::get_body_from_mouse_pos(&el, &renderer, &mut world).await;
+        }
         
         let handles: Vec<PhysMeshHandle> = world.phys_meshes.iter().map(|v| *v.0).collect();
         if el.event_handler.key_just_pressed(Key::R) {
+            current_handle = None;
             for handle in handles {
                 world.destroy(&mut renderer, handle).await;
             }
@@ -96,14 +102,22 @@ async fn main() {
             let _ = world.phys_world.lock().await; // force sync
         }
 
+        if (el.time * 1000.0) as i32 % 8 == 0 {
+            if let Some(handle) = current_handle {
+                ctx.current_body_handle = Some(handle);
+
+                let mut phys_world = world.phys_world.lock().await;
+                ctx.update(&mut phys_world);
+            }
+        }
+
         unsafe {
             Clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
             ClearColor(0.1, 0.2, 0.3, 1.0);
             
-            renderer.camera.proj = Mat4::perspective_rh_gl(80.0f32.to_radians(), el.event_handler.width/el.event_handler.height, 0.1, 1000.0);
             let now = std::time::Instant::now();
             renderer.draw();
-            render_time = now.elapsed().as_secs_f32();
+            ctx.render_time = now.elapsed().as_secs_f32();
             el.ui.draw();
         }
 
