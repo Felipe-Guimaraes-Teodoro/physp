@@ -1,6 +1,6 @@
 use std::{collections::HashMap, ops::{Index, IndexMut}, sync::{mpsc::channel, Arc}};
 
-use chaos_framework::Renderer;
+use chaos_framework::{Renderer, Vec3};
 use rapier3d::prelude::*;
 use tokio::sync::{mpsc::{self, Sender}, Mutex};
 
@@ -75,31 +75,44 @@ impl PhysicalWorld {
             &self.event_handler,
         );
     }
+}
 
+pub enum PhysicsCommand {
+    Impulse(Vec3, RigidBodyHandle)
 }
 
 pub struct World {
     pub phys_world: Arc<Mutex<PhysicalWorld>>,
     pub phys_meshes: HashMap<PhysMeshHandle, PhysMesh>,
-    sender: Sender<f32>,
+    dt_sender: Sender<f32>,
+    pub command_sender: Sender<PhysicsCommand>,
 }
 
 impl World {
     pub fn new() -> Self {
-        let (sender, mut receiver) = mpsc::channel(1);
+        let (dt_sender, mut dt_receiver) = mpsc::channel(1);
+        let (command_sender, mut command_receiver) = mpsc::channel(16);
 
         let phys_world = Arc::new(Mutex::new(PhysicalWorld::new()));
         let phys_world_clone = phys_world.clone();
         tokio::task::spawn(async move {
-            while let Some(dt) = receiver.recv().await {
+            while let Some(dt) = dt_receiver.recv().await {
                 if let Ok(mut phys_world) = phys_world_clone.try_lock() {
                 // let mut phys_world = phys_world_clone.lock().await;
                     phys_world.step(dt);
+
+                    if let Ok(command) = command_receiver.try_recv() {
+                        match command {
+                            PhysicsCommand::Impulse(v, rigid_body_handle) => {
+                                phys_world.rigid_body_set[rigid_body_handle].apply_impulse(vector![v.x, v.y, v.z], true);
+                            },
+                        }
+                    }
                 }
             };
         });
 
-        Self { phys_world, phys_meshes: HashMap::new(), sender }
+        Self { phys_world, phys_meshes: HashMap::new(), dt_sender, command_sender }
     }
 
     pub async fn update(&mut self, renderer: &mut Renderer, dt: f32) {
@@ -111,7 +124,7 @@ impl World {
             }
         }
 
-        self.sender.send(dt).await.unwrap();
+        self.dt_sender.send(dt).await.unwrap();
     }
 }
 

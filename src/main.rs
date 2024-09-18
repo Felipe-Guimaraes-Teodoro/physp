@@ -6,6 +6,7 @@ mod globals;
 mod viewport;
 mod raycaster;
 mod utils;
+mod selection;
 
 use std::sync::{Arc, Mutex};
 
@@ -57,7 +58,7 @@ async fn main() {
     
     client.send_message(addr, "hi!").await.unwrap();
 
-    let mut ctx = ViewportCtx::new();
+    let mut ctx = ViewportCtx::new(&mut renderer);
 
     let mut current_handle = None;
 
@@ -73,7 +74,8 @@ async fn main() {
         renderer.camera.update(renderer.camera.pos, &el);
 
         {
-            AppViewport::uptate(&mut ctx, &mut el, &mut renderer);
+            AppViewport::update(&mut ctx, &mut el, &mut renderer, &mut world)
+                .await;
         }
         
         if el.is_key_down(Key::LeftAlt) {
@@ -83,7 +85,7 @@ async fn main() {
         }
 
         if el.event_handler.key_just_pressed(Key::Q) {
-            current_handle = Raycaster::get_body_from_mouse_pos(&el, &renderer, &mut world).await;
+            current_handle = Raycaster::get_body_from_mouse_pos(&el, &renderer, &mut world, &ctx).await;
         }
         
         let handles: Vec<PhysMeshHandle> = world.phys_meshes.iter().map(|v| *v.0).collect();
@@ -103,12 +105,12 @@ async fn main() {
         }
 
         if (el.time * 1000.0) as i32 % 8 == 0 {
+            let mut phys_world = world.phys_world.lock().await;
             if let Some(handle) = current_handle {
                 ctx.current_body_handle = Some(handle);
-
-                let mut phys_world = world.phys_world.lock().await;
-                ctx.update(&mut phys_world);
             }
+            
+            ctx.update(&mut phys_world, &el);
         }
 
         unsafe {

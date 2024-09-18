@@ -1,7 +1,7 @@
 use chaos_framework::{vec2, EventLoop, Renderer};
 use rapier3d::prelude::{RigidBody, RigidBodyHandle};
 
-use crate::{phys::World, utils::get_ray_from_mouse};
+use crate::{phys::World, utils::get_ray_from_mouse, viewport::ViewportCtx};
 
 pub struct Raycaster {
 
@@ -12,6 +12,7 @@ impl Raycaster {
         el: &EventLoop, 
         renderer: &Renderer,
         world: &mut World,
+        ctx: &ViewportCtx,
     ) -> Option<RigidBodyHandle> {
         let mouse_pos = el.event_handler.mouse_pos;
         let (w, h) = el.window.get_size();
@@ -19,7 +20,14 @@ impl Raycaster {
         let projection = renderer.camera.proj;
         let view = renderer.camera.view;
 
-        let (origin, dir) = get_ray_from_mouse(mouse_pos, window_size, projection, view);
+        let (origin, dir) = get_ray_from_mouse(
+            mouse_pos, 
+            window_size, 
+            projection, 
+            ctx.w_padding as f32,
+            ctx.h_padding as f32,
+            view
+        );
 
         let mut phys_world = world.phys_world.lock().await;
         
