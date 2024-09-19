@@ -8,6 +8,7 @@ pub struct AppViewport {
     selected: usize,
 }
 
+#[derive(Clone)]
 pub struct ViewportCtx {
     pub rb_size: f32,
     pub render_time: f32,
@@ -67,11 +68,19 @@ impl ViewportCtx {
         }
     }
 
-    pub fn update(
+    pub async fn update(
         &mut self, 
-        phys_world: &mut PhysicalWorld, 
+        world: &mut World, 
+        renderer: &mut Renderer,
         el: &EventLoop,
+        current_handle: Option<RigidBodyHandle>,
     ) {
+        let phys_world = world.phys_world.lock().await;
+
+        if let Some(handle) = current_handle {
+            self.current_body_handle = Some(handle);
+        }
+        
         if let Some(handle) = self.current_body_handle {
             if let Some(body) = phys_world.rigid_body_set.get(handle) {
                 self.current_body = Some(body.clone());
@@ -93,7 +102,16 @@ impl ViewportCtx {
                             total_force += glam_force;
                         }
                     }
-                    dbg!(total_force);
+
+                    if let Some(phys_mesh_handle) = world.get_phys_mesh_from_handle(handle) {
+                        let mesh_handle = world.phys_meshes[phys_mesh_handle].mesh;
+
+                        let stress = total_force.length();
+
+                        let color = vec3(stress, 0.0, 16.0 - stress) / 8.0 * read_rb_overhaul_size().cbrt();
+
+                        renderer.meshes[mesh_handle].color = color;
+                    }
                 }
 
             }   

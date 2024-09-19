@@ -150,6 +150,16 @@ impl World {
         handle
     }
 
+    pub fn get_phys_mesh_from_handle(&self, handle: RigidBodyHandle) -> Option<PhysMeshHandle> {
+        for (phys_mesh_handle, phys_mesh) in &self.phys_meshes {
+            if phys_mesh.body == handle {
+                return Some(*phys_mesh_handle);
+            }
+        }
+
+        return None;
+    }
+
     pub async fn add_cube(&mut self, renderer: &mut Renderer) -> PhysMeshHandle {
         let mut phys_world = self.phys_world.lock().await;
         let cube = PhysMesh::cube(renderer, &mut phys_world);

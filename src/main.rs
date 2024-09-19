@@ -117,12 +117,7 @@ async fn main() {
         }
 
         if (el.time * 1000.0) as i32 % 8 == 0 && ctx.edit_mode {
-            let mut phys_world = world.phys_world.lock().await;
-            if let Some(handle) = current_handle {
-                ctx.current_body_handle = Some(handle);
-            }
-            
-            ctx.update(&mut phys_world, &el);
+            ctx.update(&mut world, &mut renderer, &el, current_handle).await;
         }
 
         RbBuilder::update(&mut world, &mut renderer, &el, &ctx).await;
