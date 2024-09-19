@@ -5,6 +5,7 @@ use crate::{globals::{modify_rb_overhaul_size, read_rb_overhaul_size}, phys::{Ph
 
 pub struct AppViewport {
     ctx: ViewportCtx,
+    selected: usize,
 }
 
 pub struct ViewportCtx {
@@ -23,6 +24,8 @@ pub struct ViewportCtx {
 
     pub current_body_handle: Option<RigidBodyHandle>,
     pub current_body: Option<RigidBody>,
+
+    pub selected: String,
 
     pub hierarchy: Option<RigidBodySet>,
 
@@ -53,6 +56,8 @@ impl ViewportCtx {
             current_body: None,
             current_body_handle: None,
 
+            selected: "Dynamic".to_string(),
+
             hierarchy: None,
             selection_mesh: renderer
                 .add_mesh(sphere)
@@ -62,11 +67,40 @@ impl ViewportCtx {
         }
     }
 
-    pub fn update(&mut self, phys_world: &mut PhysicalWorld, el: &EventLoop) {
+    pub fn update(
+        &mut self, 
+        phys_world: &mut PhysicalWorld, 
+        el: &EventLoop,
+    ) {
         if let Some(handle) = self.current_body_handle {
             if let Some(body) = phys_world.rigid_body_set.get(handle) {
                 self.current_body = Some(body.clone());
-            }
+                let collider = body.colliders()[0];
+                let mut total_force = Vec3::ZERO;
+
+                for pair in phys_world.narrow_phase.contact_pairs_with(collider) {
+                    let manifolds = &pair.manifolds;
+
+                    for manifold in manifolds {
+                        for point in &manifold.points {
+                            let contact_point_impulse = point.data.impulse;  
+                            let contact_normal = manifold.data.normal;            
+            
+                            let force = contact_point_impulse * contact_normal;
+                            
+                            let glam_force = vec3(force.x, force.y, force.z);
+
+                            total_force += glam_force;
+                        }
+                    }
+                    dbg!(total_force);
+                }
+
+            }   
+        }
+
+        if el.event_handler.rmb {
+
         }
         
         self.hierarchy = Some(phys_world.rigid_body_set.clone());
@@ -114,7 +148,7 @@ impl AppViewport {
 }
 
 pub async fn edit_gui(
-    frame: &mut Ui, 
+    frame: &mut Ui,
     ctx: &mut ViewportCtx, 
     renderer: &mut Renderer,
     world: &mut World,
@@ -132,8 +166,16 @@ pub async fn edit_gui(
         .build(|| {
             frame.columns(5, "0", true);
             
-            frame.text(format!("RT: {:.1}ms\nST: {:.1}ms\nDT: {:.1}", ctx.render_time*1000.0, ctx.phys_time*1000.0, ctx.dt));
+            frame.text(format!("RT: {:.1}ms\nDT: {:.1}", ctx.render_time*1000.0, ctx.dt));
             
+
+            if let Ok(status) = world.status {
+                 let solve_time = status.solve_time*1000.0;
+                 frame.text(format!("ST: {:.1}", solve_time));
+            } else {
+                frame.text("ST: UND.");
+            }
+
             frame.next_column();
 
             frame.slider("RB_OVERHAUL_SIZE", 0.1, 10.0, &mut ctx.rb_size);
@@ -151,7 +193,6 @@ pub async fn edit_gui(
                 // hierarchy.iter().for_each(|(handle, body)| {
                 //     frame.text(format!("{:?}", body));
                 // });
-
                 frame.text(format!("{}", hierarchy.len()));
             }
         });
@@ -166,10 +207,26 @@ pub async fn edit_gui(
             if let Some(body) = &mut ctx.current_body {
                 frame.text(format!("GAV. POT. ENERGY: {:.1}", body.gravitational_potential_energy(0.16, vector![0.0, -9.81, 0.0])));
                 frame.text(format!("LIN. VELOCITY: {:.1}", body.linvel()));
-                frame.text(format!("TY: {:?}", body.body_type()));
+
+                let items = vec!["Dynamic"];
+                
+                if let Some(_cb) = frame.begin_combo("RB TYPE", format!("{:?}", body.body_type())) {
+                    for cur in &items {
+                        if &ctx.selected.as_str() == cur {
+                            frame.set_item_default_focus();
+                        }
+                        let clicked = frame.selectable_config(cur)
+                            .selected(&ctx.selected.as_str() == cur)
+                            .build();
+                        if clicked {
+                            ctx.selected = cur.to_string();
+                        }
+                    }
+                }
 
                 pos = vec3(body.translation().x, body.translation().y, body.translation().z);
-                body_pos = pos;
+                
+                body_pos = vec3(pos.x, pos.y, pos.z);
             } else {
                 
             }
@@ -180,8 +237,7 @@ pub async fn edit_gui(
     if let Some(handle) = ctx.current_body_handle {
         if ctx.lmb {
             world.command_sender
-                .send(PhysicsCommand::Impulse(renderer.camera.pos - body_pos, handle))
-                .await
+                .try_send(PhysicsCommand::Impulse(renderer.camera.pos - body_pos, handle))
                 .unwrap();
         }
     }

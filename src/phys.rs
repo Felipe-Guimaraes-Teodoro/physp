@@ -2,10 +2,11 @@ use std::{collections::HashMap, ops::{Index, IndexMut}, sync::{mpsc::channel, Ar
 
 use chaos_framework::{Renderer, Vec3};
 use rapier3d::prelude::*;
-use tokio::sync::{mpsc::{self, Sender}, Mutex};
+use tokio::sync::{mpsc::{self, error::TryRecvError, Receiver, Sender}, Mutex};
 
 use crate::{globals::read_rb_overhaul_size, physics_util::PhysMesh};
 
+/* TODO: add the physics meshes here to grant access to meshes */
 pub struct PhysicalWorld {
     pub rigid_body_set: RigidBodySet,
     pub collider_set: ColliderSet,
@@ -78,7 +79,14 @@ impl PhysicalWorld {
 }
 
 pub enum PhysicsCommand {
-    Impulse(Vec3, RigidBodyHandle)
+    Impulse(Vec3, RigidBodyHandle),
+    SetType(RigidBodyType, RigidBodyHandle),
+    Translate(Vec3, RigidBodyHandle),
+}
+
+#[derive(Copy, Clone)]
+pub struct PhyisicsStatus {
+    pub solve_time: f32,
 }
 
 pub struct World {
@@ -86,43 +94,69 @@ pub struct World {
     pub phys_meshes: HashMap<PhysMeshHandle, PhysMesh>,
     dt_sender: Sender<f32>,
     pub command_sender: Sender<PhysicsCommand>,
+    pub report_receiver: Receiver<PhyisicsStatus>,
+    pub status: Result<PhyisicsStatus, TryRecvError>,
 }
 
 impl World {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         let (dt_sender, mut dt_receiver) = mpsc::channel(1);
         let (command_sender, mut command_receiver) = mpsc::channel(16);
+        let (report_sender, mut report_receiver) = mpsc::channel(16);
 
         let phys_world = Arc::new(Mutex::new(PhysicalWorld::new()));
         let phys_world_clone = phys_world.clone();
         tokio::task::spawn(async move {
+            let mut elapsed = 0.0;
+
             while let Some(dt) = dt_receiver.recv().await {
                 if let Ok(mut phys_world) = phys_world_clone.try_lock() {
-                // let mut phys_world = phys_world_clone.lock().await;
+                    let now = std::time::Instant::now();
                     phys_world.step(dt);
+                    elapsed = now.elapsed().as_secs_f32();
 
                     if let Ok(command) = command_receiver.try_recv() {
                         match command {
                             PhysicsCommand::Impulse(v, rigid_body_handle) => {
-                                phys_world.rigid_body_set[rigid_body_handle].apply_impulse(vector![v.x, v.y, v.z], true);
-                            },
+                                let body = &mut phys_world.rigid_body_set[rigid_body_handle];
+                                body.apply_impulse(vector![v.x, v.y, v.z], true);
+                            }
+                            PhysicsCommand::SetType(rigid_body_type, rigid_body_handle) => {
+                                let body = &mut phys_world.rigid_body_set[rigid_body_handle];
+                                body.set_body_type(rigid_body_type, false);
+                            }
+                            PhysicsCommand::Translate(v, rigid_body_handle) => {
+                                let body = &mut phys_world.rigid_body_set[rigid_body_handle];
+                                body.set_position(vector![v.x, v.y, v.z].into(), false);
+                            }
                         }
                     }
+
+                    // std::thread::sleep_ms(16);
+
+                    report_sender.try_send(
+                        PhyisicsStatus {
+                            solve_time: elapsed,
+                        }
+                    ).unwrap();
                 }
             };
         });
 
-        Self { phys_world, phys_meshes: HashMap::new(), dt_sender, command_sender }
+        let status = report_receiver.try_recv();
+
+        Self { phys_world, phys_meshes: HashMap::new(), dt_sender, command_sender, report_receiver, status, }
     }
 
     pub async fn update(&mut self, renderer: &mut Renderer, dt: f32) {
         /* TODO: every N frames, force the simulation to synchronize */
-
         if let Ok(mut phys_world) = self.phys_world.try_lock() {
             for phys_mesh in self.phys_meshes.values_mut() {
                 phys_mesh.update(renderer, &mut phys_world);
             }
         }
+
+        self.status = self.report_receiver.try_recv();
 
         self.dt_sender.send(dt).await.unwrap();
     }

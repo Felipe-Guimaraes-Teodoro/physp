@@ -37,7 +37,6 @@ impl phys::PhysicalWorld {
         return body_handle;
     }
 
-    
     pub fn body_raycast(&mut self, origin: Vec3, direction: Vec3) -> Option<RigidBodyHandle> {
         let ray = Ray::new(
             vector![origin.x, origin.y, origin.z].into(), 
@@ -53,11 +52,30 @@ impl phys::PhysicalWorld {
             QueryFilter::default() 
         ) {
             if let Some(collider) = self.collider_set.get(handle) {
-                dbg!(collider.parent());
                 return collider.parent();
             } else {
                 return None;
             }
+        } else {
+            return None;
+        };
+    }
+    
+    pub fn pos_raycast(&mut self, origin: Vec3, direction: Vec3) -> Option<Vec3> {
+        let ray = Ray::new(
+            vector![origin.x, origin.y, origin.z].into(), 
+            vector![direction.x, direction.y, direction.z]
+        );
+
+        if let Some((_handle, dist)) = self.query_pipeline.cast_ray(
+            &self.rigid_body_set,
+            &self.collider_set,          
+            &ray,               
+            1000.0,            
+            true,   
+            QueryFilter::default() 
+        ) {
+            return Some(origin + (direction * dist));
         } else {
             return None;
         };

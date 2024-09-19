@@ -7,8 +7,9 @@ mod viewport;
 mod raycaster;
 mod utils;
 mod selection;
+mod rb_builder;
 
-use std::sync::{Arc, Mutex};
+use std::{num::NonZero, sync::{Arc, Mutex}};
 
 use chaos_framework::*;
 use client::Client;
@@ -17,6 +18,7 @@ use globals::modify_rb_overhaul_size;
 use phys::{PhysMeshHandle, World};
 use rapier3d::{prelude::*, rayon::iter::{IntoParallelIterator, ParallelIterator}};
 use raycaster::Raycaster;
+use rb_builder::RbBuilder;
 use server::Server;
 use tokio::task;
 use viewport::{AppViewport, ViewportCtx};
@@ -43,7 +45,12 @@ async fn main() {
 
     el.window.glfw.set_swap_interval(SwapInterval::Sync(1));
 
-    let mut world = World::new();
+    let mut world = World::new().await;
+    
+    let mut phys_world = world.phys_world.lock().await;
+    phys_world.integration_parameters.num_solver_iterations = NonZero::new(16).unwrap();
+    phys_world.integration_parameters.num_internal_stabilization_iterations = 12;
+    drop(phys_world);
 
     world.add_floor(vec3(125.0, 0.2, 125.0));
 
@@ -85,12 +92,13 @@ async fn main() {
         }
 
         if el.event_handler.key_just_pressed(Key::Q) {
-            current_handle = Raycaster::get_body_from_mouse_pos(&el, &renderer, &mut world, &ctx).await;
+            current_handle = Raycaster::get_body_from_mouse(&el, &renderer, &mut world, &ctx).await;
         }
         
         let handles: Vec<PhysMeshHandle> = world.phys_meshes.iter().map(|v| *v.0).collect();
         if el.event_handler.key_just_pressed(Key::R) {
             current_handle = None;
+            ctx.current_body_handle = None;
             for handle in handles {
                 world.destroy(&mut renderer, handle).await;
             }
@@ -104,7 +112,11 @@ async fn main() {
             let _ = world.phys_world.lock().await; // force sync
         }
 
-        if (el.time * 1000.0) as i32 % 8 == 0 {
+        if el.event_handler.key_just_pressed(Key::L) {
+            renderer.add_light(Light { position: renderer.camera.pos, color: Vec3::ONE });
+        }
+
+        if (el.time * 1000.0) as i32 % 8 == 0 && ctx.edit_mode {
             let mut phys_world = world.phys_world.lock().await;
             if let Some(handle) = current_handle {
                 ctx.current_body_handle = Some(handle);
@@ -112,6 +124,8 @@ async fn main() {
             
             ctx.update(&mut phys_world, &el);
         }
+
+        RbBuilder::update(&mut world, &mut renderer, &el, &ctx).await;
 
         unsafe {
             Clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
@@ -127,10 +141,10 @@ async fn main() {
 }
 
 pub async fn gen_spheres(world: &mut World, renderer: &mut Renderer) {
-    for i in 0..128 {
-        let cube = world.add_cube(renderer).await;
-        let handle = world.phys_meshes[cube].body;
-        world.phys_world.lock().await.rigid_body_set.get_mut(handle).unwrap()
-            .set_translation(vector![rand_betw(-2.0, 2.0), rand_betw(0.0, 4.0), rand_betw(-2.0, 2.0)], false);
-    }
+    // for i in 0..128 {
+    //     let cube = world.add_cube(renderer).await;
+    //     let handle = world.phys_meshes[cube].body;
+    //     world.phys_world.lock().await.rigid_body_set.get_mut(handle).unwrap()
+    //         .set_translation(vector![rand_betw(-2.0, 2.0), rand_betw(0.0, 4.0), rand_betw(-2.0, 2.0)], false);
+    // }
 }
